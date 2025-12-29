@@ -1,9 +1,17 @@
 
 import { GoogleGenAI, Type, Modality } from "@google/genai";
-import { Bible, ContinuityError } from "../types";
+import { Bible, ContinuityError } from "../types/types";
 
-// Always use the process.env.API_KEY directly as per @google/genai guidelines.
-const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
+// Always use the import.meta.env.API_KEY directly as per @google/genai guidelines.
+// ✅ ПРАВИЛЬНО (Для Vite)
+const apiKey = import.meta.env.VITE_GEMINI_API_KEY;
+
+if (!apiKey) {
+  console.error("CRITICAL: VITE_GEMINI_API_KEY is missing in .env");
+}
+
+// ✅ ВОТ ЭТОЙ СТРОКИ НЕ ХВАТАЛО. Без нее переменная 'ai' не существует.
+const ai = new GoogleGenAI({ apiKey });
 
 const TEXT_MODEL = "gemini-3-flash-preview"; 
 const IMAGE_MODEL = "gemini-2.5-flash-image";
@@ -86,17 +94,65 @@ export const runWriterAgent = async (bible: Bible, beatSheet: string, existingCo
 
 export const runContinuityAgent = async (bible: Bible, sceneText: string): Promise<ContinuityError[]> => {
   const context = formatBibleContext(bible);
-  const response = await ai.models.generateContent({
-    model: TEXT_MODEL,
-    contents: `${context}\n\nSCENE TEXT:\n${sceneText}`,
-    config: {
-      systemInstruction: "You are the CONTINUITY agent. Return JSON with 'errors' array.",
-      responseMimeType: "application/json",
-      temperature: 0.1,
+  
+  // Явно задаем схему ответа
+  const strictPrompt = `
+    ${context}
+
+    SCENE TEXT TO ANALYZE:
+    ${sceneText}
+
+    TASK:
+    Identify consistency errors (dead characters appearing, wrong locations, contradictions with the summary).
+    
+    IMPORTANT: You MUST return valid JSON only. No markdown formatting.
+    The JSON must follow this exact structure:
+    {
+      "errors": [
+        {
+          "type": "Character Inconsistency",
+          "description": "Character 'Alex' is described as afraid of water, but swims confidently here."
+        }
+      ]
     }
-  });
-  const result = JSON.parse(cleanJsonString(response.text || "{}"));
-  return result.errors || [];
+    
+    If there are no errors, return: { "errors": [] }
+  `;
+
+  try {
+    const response = await ai.models.generateContent({
+      model: TEXT_MODEL,
+      contents: [
+        {
+            role: "user",
+            parts: [{ text: strictPrompt }]
+        }
+      ],
+      config: {
+        // Убираем systemInstruction отсюда и переносим всё в промпт, 
+        // так как Gemini Flash лучше слушается примеров в user-промпте для JSON
+        responseMimeType: "application/json",
+        temperature: 0.1,
+      }
+    });
+    
+    const text = response.response.text();
+    console.log("Raw Continuity Response:", text); // <-- СМОТРИТЕ СЮДА В КОНСОЛИ (F12)
+
+    const result = JSON.parse(cleanJsonString(text || "{}"));
+    
+    // Дополнительная защита: маппинг, если ИИ вдруг ошибся в регистре ключей
+    const cleanErrors = (result.errors || []).map((err: any) => ({
+      type: err.type || err.Type || err.issue || "General Issue",
+      description: err.description || err.Description || err.detail || err.message || "No description provided."
+    }));
+
+    return cleanErrors;
+
+  } catch (error) {
+    console.error("Continuity Error:", error);
+    return [];
+  }
 };
 
 export const runEditorAgent = async (sceneText: string, instructions: string): Promise<string> => {

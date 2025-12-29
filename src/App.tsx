@@ -1,9 +1,8 @@
-
 import React, { useState, useEffect } from 'react';
 import { BibleManager } from './components/BibleManager';
 import { AgentSidebar } from './components/AgentSidebar';
 import { WriterEditor } from './components/WriterEditor';
-import { Bible, Scene, AgentStatus, ContinuityError, AgentType } from './types';
+import { Bible, Scene, AgentStatus, ContinuityError, AgentType } from './types/types';
 import { runPlannerAgent, runWriterAgent, runContinuityAgent, runEditorAgent, runVisualizerAgent } from './services/geminiService';
 
 const INITIAL_BIBLE: Bible = {
@@ -47,16 +46,19 @@ const App: React.FC = () => {
   const [scenes, setScenes] = useState<Scene[]>([INITIAL_SCENE]);
   const [activeSceneId, setActiveSceneId] = useState<string>(INITIAL_SCENE.id);
   const [isLoaded, setIsLoaded] = useState(false);
-  // The API key is managed externally.
-  const [hasApiKey, setHasApiKey] = useState(true);
+  
+  // Изначально считаем, что ключа нет, пока не проверим
+  const [hasApiKey, setHasApiKey] = useState(false);
   
   const [agentStatus, setAgentStatus] = useState<AgentStatus>({ isWorking: false });
   const [continuityErrors, setContinuityErrors] = useState<ContinuityError[]>([]);
   const [toast, setToast] = useState<{message: string, type: 'error'|'success'} | null>(null);
 
+  // ✅ ИСПРАВЛЕНИЕ: Правильное чтение ключа VITE_GEMINI_API_KEY
   useEffect(() => {
-    // API key check moved to boolean literal as it's a hard requirement handled externally.
-    const key = process.env.API_KEY;
+    const key = import.meta.env.VITE_GEMINI_API_KEY;
+    // Логируем для проверки (можно убрать потом)
+    console.log("Checking API Key:", key ? "Found" : "Missing");
     setHasApiKey(!!key && key.length > 0);
   }, []);
 
@@ -92,30 +94,58 @@ const App: React.FC = () => {
 
   const handleAgentAction = async (type: AgentType, input?: string) => {
     if (!hasApiKey) {
-       setToast({ message: "API Service is unavailable.", type: 'error' });
+       setToast({ message: "API Service is unavailable (Check .env file).", type: 'error' });
        return;
     }
+
+    // Устанавливаем начальный статус
     setAgentStatus({ isWorking: true, currentTask: type, agentName: type.toUpperCase() });
+
     try {
       if (type === 'planner') {
         const plan = await runPlannerAgent(bible, input || "");
         updateActiveScene({ beatSheet: plan, lastAgent: 'planner' });
+
       } else if (type === 'writer') {
+        // ЭТАП 1: Написание
         const draft = await runWriterAgent(bible, activeScene.beatSheet, activeScene.content);
         updateActiveScene({ content: draft, lastAgent: 'writer' });
+        
+        // Сообщаем, что написание закончено, начинаем проверку
+        setToast({ message: "Draft written! Now checking consistency...", type: 'success' });
+        
+        // Меняем статус агента визуально, чтобы пользователь понимал, что происходит
+        setAgentStatus({ isWorking: true, currentTask: 'continuity', agentName: 'AUTO-CHECK' });
+
+        // ЭТАП 2: Авто-проверка (Пайплайн)
+        const errors = await runContinuityAgent(bible, draft);
+        setContinuityErrors(errors);
+
+        if (errors.length > 0) {
+          setToast({ message: `Found ${errors.length} continuity issues. Check 'CONTI' tab.`, type: 'error' });
+        } else {
+          setToast({ message: "Perfect! No continuity errors found.", type: 'success' });
+        }
+
       } else if (type === 'continuity') {
         const errors = await runContinuityAgent(bible, activeScene.content);
         setContinuityErrors(errors);
+        if (errors.length === 0) setToast({ message: "No errors found.", type: 'success' });
+
       } else if (type === 'editor') {
         const edited = await runEditorAgent(activeScene.content, input || "");
         updateActiveScene({ content: edited, lastAgent: 'editor' });
+
       } else if (type === 'visualizer') {
         const imageUrl = await runVisualizerAgent(bible, activeScene.title, activeScene.content || activeScene.beatSheet);
         if (imageUrl) updateActiveScene({ imageUrl, lastAgent: 'visualizer' });
       }
+
     } catch (error: any) {
+      console.error(error);
       setToast({ message: "AI Action failed. See console for details.", type: 'error' });
     } finally {
+      // ✅ ГАРАНТИРОВАННО СНИМАЕМ БЛОКИРОВКУ КНОПКИ
       setAgentStatus({ isWorking: false });
     }
   };

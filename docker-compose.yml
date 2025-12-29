@@ -1,3 +1,4 @@
+version: '3.8'
 
 services:
   app:
@@ -5,7 +6,10 @@ services:
     ports:
       - "5173:5173"
     volumes:
+      # Синхронизация папки, чтобы изменения кода работали без перезагрузки
       - .:/app
+      # Исключаем папку node_modules контейнера из синхронизации
       - /app/node_modules
-    environment:
-      - VITE_GEMINI_API_KEY=${VITE_GEMINI_API_KEY}
+    env_file:
+      # Явно указываем, откуда брать ключи
+      - .env

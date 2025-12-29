@@ -10,20 +10,25 @@
       "DOM.Iterable"
     ],
     "skipLibCheck": true,
-    "types": [
-      "node"
-    ],
+    
+    /* Объединили типы в один массив */
+    "types": ["vite/client", "node"],
+
     "moduleResolution": "bundler",
     "isolatedModules": true,
     "moduleDetection": "force",
     "allowJs": true,
     "jsx": "react-jsx",
+    
+    /* Настройка путей */
+    "baseUrl": ".",
     "paths": {
-      "@/*": [
-        "./*"
-      ]
+      "@/*": ["./src/*"]
     },
+    
     "allowImportingTsExtensions": true,
     "noEmit": true
-  }
+  },
+  /* Главная настройка: сканировать папку src */
+  "include": ["src"]
 }

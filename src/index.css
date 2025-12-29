@@ -1,0 +1,9 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* Можно добавить базовый цвет фона, чтобы не было белым */
+body {
+  background-color: #111827; /* Темно-серый цвет (gray-900) */
+  color: white;
+}
