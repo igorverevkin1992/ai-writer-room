@@ -6,6 +6,8 @@ import type {
   GenreBeat,
   Project,
   Scene,
+  SourceChunk,
+  SourceDoc,
   StoryBible,
   StructureNode,
 } from '../types';
@@ -19,6 +21,8 @@ export class WritersRoomDB extends Dexie {
   arcStates!: Table<CharacterArcState, string>;
   scenes!: Table<Scene, string>;
   conversations!: Table<AIConversation, string>;
+  sourceDocs!: Table<SourceDoc, string>;
+  sourceChunks!: Table<SourceChunk, string>;
 
   constructor(name = 'writers-room-os') {
     super(name);
@@ -31,6 +35,12 @@ export class WritersRoomDB extends Dexie {
       arcStates: 'id, projectId, characterId, structureNodeId, [characterId+structureNodeId]',
       scenes: 'id, projectId, parentNodeId, [parentNodeId+order]',
       conversations: 'id, projectId, [projectId+mode], updatedAt',
+    });
+    // Корпус первоисточников общий для всех проектов: методология не меняется
+    // от проекта к проекту.
+    this.version(2).stores({
+      sourceDocs: 'id, author, kind, pinned, createdAt',
+      sourceChunks: 'id, docId, [docId+index], *concepts',
     });
   }
 }

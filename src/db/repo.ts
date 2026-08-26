@@ -1,5 +1,7 @@
 import { db, uid } from './db';
 import { GENRE_BEAT_LIBRARY } from './seed/genreBeats';
+import { invalidateCorpusIndex } from '../lib/corpus/search';
+import type { RawChunk } from '../lib/corpus/chunk';
 import type {
   AIConversation,
   AIMessage,
@@ -7,6 +9,7 @@ import type {
   Character,
   CharacterArcState,
   CircleSlot,
+  Concept,
   Genre,
   GenreBeat,
   ID,
@@ -15,6 +18,9 @@ import type {
   ProjectType,
   Scene,
   ScopeType,
+  SourceAuthor,
+  SourceDoc,
+  SourceKind,
   StructureLevel,
   StructureNode,
 } from '../types';
@@ -516,4 +522,63 @@ export async function appendConversation(params: {
 
 export async function deleteConversation(id: ID): Promise<void> {
   await db.conversations.delete(id);
+}
+
+/* ────────────────────────  Корпус первоисточников  ──────────────────────── */
+
+export async function addSourceDoc(params: {
+  title: string;
+  author: SourceAuthor;
+  kind: SourceKind;
+  citation: string;
+  note?: string;
+  chunks: RawChunk[];
+  charCount: number;
+}): Promise<ID> {
+  const id = uid();
+  const doc: SourceDoc = {
+    id,
+    title: params.title,
+    author: params.author,
+    kind: params.kind,
+    citation: params.citation,
+    pinned: false,
+    charCount: params.charCount,
+    chunkCount: params.chunks.length,
+    createdAt: Date.now(),
+    note: params.note ?? '',
+  };
+  await db.transaction('rw', [db.sourceDocs, db.sourceChunks], async () => {
+    await db.sourceDocs.add(doc);
+    await db.sourceChunks.bulkAdd(
+      params.chunks.map((c) => ({
+        id: uid(),
+        docId: id,
+        index: c.index,
+        anchor: c.anchor,
+        text: c.text,
+        concepts: c.concepts,
+      })),
+    );
+  });
+  invalidateCorpusIndex();
+  return id;
+}
+
+export async function updateSourceDoc(id: ID, patch: Partial<SourceDoc>): Promise<void> {
+  await db.sourceDocs.update(id, patch);
+  invalidateCorpusIndex();
+}
+
+export async function deleteSourceDoc(id: ID): Promise<void> {
+  await db.transaction('rw', [db.sourceDocs, db.sourceChunks], async () => {
+    await db.sourceDocs.delete(id);
+    await db.sourceChunks.where({ docId: id }).delete();
+  });
+  invalidateCorpusIndex();
+}
+
+export async function setChunkConcepts(chunkId: ID, concepts: Concept[]): Promise<void> {
+  await db.sourceChunks.update(chunkId, { concepts });
+  invalidateCorpusIndex();
 }

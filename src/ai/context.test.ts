@@ -1,9 +1,12 @@
 import { describe, expect, it } from 'vitest';
 import {
-  buildCachedSystem,
+  buildCachedBlocks,
   buildDynamicContext,
   buildUserMessage,
+  citationOf,
   defaultToggles,
+  renderExcerpts,
+  retrievalQuery,
   type ContextBundle,
 } from './context';
 import { MODE_SYSTEM_PROMPTS } from './prompts';
@@ -129,16 +132,40 @@ const bundle: ContextBundle = {
 };
 
 describe('блок A (кэшируемый префикс)', () => {
+  const blocks = (mode: AIMode, pinnedBlock = '') =>
+    buildCachedBlocks({ bundle, toggles: defaultToggles(mode), pinnedBlock });
+
   it('содержит ядро проекта и не содержит динамику', () => {
-    const system = buildCachedSystem(bundle, defaultToggles('arc_audit'));
-    expect(system).toContain('Слепая зона');
-    expect(system).toContain('Ложь: Закон бессилен');
-    expect(system).not.toContain('ИНТ. АРХИВ');
+    const text = blocks('arc_audit')
+      .map((b) => b.text)
+      .join('\n');
+    expect(text).toContain('Слепая зона');
+    expect(text).toContain('Ложь: Закон бессилен');
+    expect(text).not.toContain('ИНТ. АРХИВ');
   });
 
   it('стабилен между вызовами — иначе кэш не сработает', () => {
-    const toggles = defaultToggles('scene_doctor');
-    expect(buildCachedSystem(bundle, toggles)).toBe(buildCachedSystem(bundle, toggles));
+    expect(JSON.stringify(blocks('scene_doctor'))).toBe(JSON.stringify(blocks('scene_doctor')));
+  });
+
+  it('корпус идёт раньше библии проекта и живёт час', () => {
+    const withCorpus = blocks('arc_audit', 'ПЕРВОИСТОЧНИКИ ЦЕЛИКОМ (канон)\nтекст книги');
+    expect(withCorpus[0].text).toContain('ПЕРВОИСТОЧНИКИ ЦЕЛИКОМ');
+    expect(withCorpus[0].ttl).toBe('1h');
+    expect(withCorpus[1].text).toContain('Слепая зона');
+    expect(withCorpus[1].ttl).toBe('5m');
+  });
+
+  it('правка библии не трогает блок с корпусом', () => {
+    const pinned = 'книга целиком';
+    const before = blocks('arc_audit', pinned);
+    const after = buildCachedBlocks({
+      bundle: { ...bundle, project: { ...bundle.project, logline: 'другой логлайн' } },
+      toggles: defaultToggles('arc_audit'),
+      pinnedBlock: pinned,
+    });
+    expect(after[0].text).toBe(before[0].text);
+    expect(after[1].text).not.toBe(before[1].text);
   });
 });
 
@@ -151,11 +178,12 @@ describe('блок B (после брейкпоинта)', () => {
       arc_audit: 'СОСТОЯНИЕ ЛЖИ ПО БИТАМ',
       scene_doctor: 'Задача сцены',
       fincher_pass: 'ИСХОДНЫЙ ТЕКСТ СЦЕНЫ',
+      canon_check: 'РАЗБИРАЕМЫЙ БИТ',
     };
     for (const [mode, marker] of Object.entries(cases) as [AIMode, string][]) {
       const text = buildDynamicContext(bundle, defaultToggles(mode), {
         nodeId: 'n1',
-        beatId: mode === 'beat_transcendence' ? 'beat1' : null,
+        beatId: mode === 'beat_transcendence' || mode === 'canon_check' ? 'beat1' : null,
         characterId: 'c1',
         sceneId: 's1',
       });
@@ -196,8 +224,8 @@ describe('блок B (после брейкпоинта)', () => {
 });
 
 describe('системные промпты режимов', () => {
-  it('заданы для всех шести режимов', () => {
-    expect(Object.keys(MODE_SYSTEM_PROMPTS)).toHaveLength(6);
+  it('заданы для всех семи режимов', () => {
+    expect(Object.keys(MODE_SYSTEM_PROMPTS)).toHaveLength(7);
     for (const prompt of Object.values(MODE_SYSTEM_PROMPTS)) {
       expect(prompt.length).toBeGreaterThan(200);
     }
@@ -229,5 +257,74 @@ describe('estimateCost', () => {
     });
     expect(warm).toBeLessThan(cold);
     expect(warm).toBeCloseTo((10_000 * 5 * 0.1 + 1000 * 25) / 1_000_000, 8);
+  });
+});
+
+describe('корпус в промпте', () => {
+  const excerpt = {
+    doc: {
+      id: 'd1',
+      title: 'Анатомия жанров',
+      author: 'truby' as const,
+      kind: 'book' as const,
+      citation: 'изд. 2022',
+      pinned: false,
+      charCount: 100,
+      chunkCount: 1,
+      createdAt: 0,
+      note: '',
+    },
+    chunk: {
+      id: 'ch1',
+      docId: 'd1',
+      index: 4,
+      anchor: 'Глава 4. Детектив',
+      text: 'Детективная история начинается до появления героя.',
+      concepts: ['genre_beats' as const],
+    },
+    score: 3.1,
+  };
+
+  it('ссылка собирается из автора, названия и якоря', () => {
+    expect(citationOf(excerpt)).toBe('Труби, Анатомия жанров, Глава 4. Детектив');
+  });
+
+  it('выдержки попадают в блок B со ссылкой', () => {
+    const text = buildDynamicContext(bundle, defaultToggles('genre_audit'), {}, [excerpt]);
+    expect(text).toContain('[Труби, Анатомия жанров, Глава 4. Детектив]');
+    expect(text).toContain('начинается до появления героя');
+  });
+
+  it('выключенный тумблер выбрасывает выдержки из промпта', () => {
+    const toggles = { ...defaultToggles('genre_audit'), corpus: false };
+    expect(buildDynamicContext(bundle, toggles, {}, [excerpt])).not.toContain('Анатомия жанров');
+  });
+
+  it('пустой корпус не оставляет заголовка без содержимого', () => {
+    expect(renderExcerpts([])).toBe('');
+  });
+
+  it('поисковый запрос расширяется терминами режима и сущности', () => {
+    const q = retrievalQuery({
+      mode: 'arc_audit',
+      bundle,
+      scope: { characterId: 'c1' },
+      query: 'почему не верю в перелом',
+    });
+    expect(q).toContain('почему не верю в перелом');
+    expect(q).toContain('Мидпоинт');
+    expect(q).toContain('Позитивная');
+    expect(q).toContain('Закон бессилен');
+  });
+
+  it('запрос по биту тянет название бита и жанр', () => {
+    const q = retrievalQuery({
+      mode: 'canon_check',
+      bundle,
+      scope: { beatId: 'beat1' },
+      query: '',
+    });
+    expect(q).toContain('Призрак детектива');
+    expect(q).toContain('Детектив');
   });
 });

@@ -58,12 +58,22 @@ export function toAIError(error: unknown): AIError {
   return new AIError(error instanceof Error ? error.message : String(error), 'unknown');
 }
 
+export interface CachedBlock {
+  text: string;
+  /** '1h' для корпуса первоисточников: он не меняется весь сеанс работы. */
+  ttl?: '5m' | '1h';
+}
+
 export interface RunParams {
   apiKey: string;
   model: string;
   effort: Effort;
-  /** Блок A — статичная библия проекта. Кэшируется целиком. */
-  cachedSystem: string;
+  /**
+   * Блок A — статичные части промпта, каждая со своим брейкпоинтом кэша.
+   * Порядок от самого стабильного к самому изменчивому: кэш сопоставляется
+   * по префиксу, и любая правка сбрасывает всё, что стоит после неё.
+   */
+  cachedBlocks: CachedBlock[];
   /** Блок B — системная рамка режима (после брейкпоинта). */
   modeSystem: string;
   /** Пользовательское сообщение: конкретный узел/сцена + запрос. */
@@ -90,8 +100,14 @@ export async function runAI(params: RunParams): Promise<RunResult> {
     model: params.model,
     max_tokens: 16000,
     system: [
-      // Брейкпоинт кэша стоит на конце статичной библии.
-      { type: 'text', text: params.cachedSystem, cache_control: { type: 'ephemeral' } },
+      // Брейкпоинт кэша стоит на конце каждой статичной части.
+      ...params.cachedBlocks
+        .filter((b) => b.text.trim())
+        .map((b) => ({
+          type: 'text' as const,
+          text: b.text,
+          cache_control: { type: 'ephemeral' as const, ttl: b.ttl ?? '5m' },
+        })),
       { type: 'text', text: params.modeSystem },
     ],
     messages: [

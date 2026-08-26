@@ -1,15 +1,20 @@
 import { useEffect, useMemo, useState } from 'react';
 import {
   CONTEXT_ITEMS,
-  buildCachedSystem,
+  DEFAULT_EXCERPT_LIMIT,
+  buildCachedBlocks,
   buildDynamicContext,
+  buildPinnedBlock,
   buildUserMessage,
+  citationOf,
   defaultToggles,
+  retrieveExcerpts,
   type ContextBundle,
   type ContextToggles,
   type Scope,
 } from '../ai/context';
-import { MODE_SYSTEM_PROMPTS } from '../ai/prompts';
+import type { CorpusExcerpt } from '../lib/corpus/search';
+import { CORPUS_FRAME, MODE_SYSTEM_PROMPTS } from '../ai/prompts';
 import { AIError, runAI } from '../ai/client';
 import { DEFAULT_MODEL, MIN_CACHEABLE_TOKENS, estimateTokens, modelInfo } from '../ai/models';
 import { getApiKey, getEffort, getModel } from '../lib/settings';
@@ -51,6 +56,9 @@ export function AIPanel({
   const [busy, setBusy] = useState(false);
   const [mamet, setMamet] = useState(false);
   const [showPrompt, setShowPrompt] = useState(false);
+  const [excerpts, setExcerpts] = useState<CorpusExcerpt[]>([]);
+  const [pinnedBlock, setPinnedBlock] = useState('');
+  const [excerptLimit, setExcerptLimit] = useState(DEFAULT_EXCERPT_LIMIT);
 
   const history = useConversations(bundle.project.id, mode);
   const model = getModel(DEFAULT_MODEL);
@@ -69,32 +77,86 @@ export function AIPanel({
 
   const fullScope: Scope = { ...scope, mametSubmode: mamet };
 
-  const cachedSystem = useMemo(
-    () => buildCachedSystem(bundle, toggles),
-    [bundle, toggles],
+  // Закреплённые целиком источники читаются один раз: они меняются редко,
+  // а весят больше всего остального вместе взятого.
+  useEffect(() => {
+    let alive = true;
+    void buildPinnedBlock().then((text) => alive && setPinnedBlock(text));
+    return () => {
+      alive = false;
+    };
+  }, [toggles.corpus_pinned, bundle.project.id]);
+
+  // Выдержки ищутся по мере правки запроса, чтобы автор видел, на что
+  // модель будет опираться, ещё до отправки.
+  useEffect(() => {
+    if (!toggles.corpus) {
+      setExcerpts([]);
+      return;
+    }
+    let alive = true;
+    const timer = setTimeout(() => {
+      void retrieveExcerpts({ mode, bundle, scope: fullScope, query, limit: excerptLimit }).then(
+        (hits) => alive && setExcerpts(hits),
+      );
+    }, 250);
+    return () => {
+      alive = false;
+      clearTimeout(timer);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [
+    toggles.corpus,
+    mode,
+    query,
+    excerptLimit,
+    bundle.project.id,
+    scope.nodeId,
+    scope.beatId,
+    scope.characterId,
+    scope.sceneId,
+  ]);
+
+  const cachedBlocks = useMemo(
+    () => buildCachedBlocks({ bundle, toggles, pinnedBlock }),
+    [bundle, toggles, pinnedBlock],
   );
   const dynamicContext = useMemo(
-    () => buildDynamicContext(bundle, toggles, fullScope),
+    () => buildDynamicContext(bundle, toggles, fullScope, excerpts),
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [bundle, toggles, scope.nodeId, scope.beatId, scope.characterId, scope.sceneId, mamet],
+    [bundle, toggles, scope.nodeId, scope.beatId, scope.characterId, scope.sceneId, mamet, excerpts],
   );
 
-  const cachedTokens = estimateTokens(cachedSystem);
-  const dynamicTokens = estimateTokens(dynamicContext + MODE_SYSTEM_PROMPTS[mode] + query);
+  const modeSystem =
+    MODE_SYSTEM_PROMPTS[mode] + (excerpts.length || pinnedBlock ? `\n${CORPUS_FRAME}` : '');
+  const cachedTokens = estimateTokens(cachedBlocks.map((b) => b.text).join(''));
+  const dynamicTokens = estimateTokens(dynamicContext + modeSystem + query);
 
   async function run() {
     setBusy(true);
     setError(null);
     setAnswer('');
     setUsage(null);
-    const userMessage = buildUserMessage({ mode, bundle, toggles, scope: fullScope, query });
+    // Ищем заново перед отправкой: запрос мог измениться быстрее дебаунса.
+    const freshExcerpts = toggles.corpus
+      ? await retrieveExcerpts({ mode, bundle, scope: fullScope, query, limit: excerptLimit })
+      : [];
+    setExcerpts(freshExcerpts);
+    const userMessage = buildUserMessage({
+      mode,
+      bundle,
+      toggles,
+      scope: fullScope,
+      query,
+      excerpts: freshExcerpts,
+    });
     try {
       const result = await runAI({
         apiKey: getApiKey(),
         model,
         effort: getEffort(),
-        cachedSystem,
-        modeSystem: MODE_SYSTEM_PROMPTS[mode],
+        cachedBlocks,
+        modeSystem,
         userMessage,
         onText: (chunk) => setAnswer((prev) => prev + chunk),
       });
@@ -183,6 +245,35 @@ export function AIPanel({
                 ))}
               </div>
             </div>
+            {toggles.corpus && (
+              <div className="pl-5 space-y-1">
+                <label className="text-[10px] text-muted flex items-center gap-2">
+                  выдержек в запросе
+                  <input
+                    type="number"
+                    min={0}
+                    max={20}
+                    value={excerptLimit}
+                    onChange={(e) => setExcerptLimit(Math.max(0, Math.min(20, Number(e.target.value))))}
+                    className="field w-16 py-0.5 px-1 text-[11px]"
+                  />
+                </label>
+                {excerpts.length ? (
+                  <ul className="space-y-0.5">
+                    {excerpts.map((e) => (
+                      <li key={e.chunk.id} className="text-[10px] text-muted truncate" title={e.chunk.text.slice(0, 400)}>
+                        <span className="text-accent">[{citationOf(e)}]</span>{' '}
+                        {e.chunk.text.slice(0, 60)}…
+                      </li>
+                    ))}
+                  </ul>
+                ) : (
+                  <p className="text-[10px] text-muted/70">
+                    Ничего не найдено — корпус пуст или запрос не совпал.
+                  </p>
+                )}
+              </div>
+            )}
             {mode === 'scene_doctor' && (
               <Toggle
                 checked={mamet}
@@ -198,7 +289,9 @@ export function AIPanel({
             </button>
             {showPrompt && (
               <pre className="text-[10px] leading-relaxed bg-ink-900 border border-ink-700 rounded p-2 max-h-64 overflow-auto whitespace-pre-wrap font-mono">
-                {`=== БЛОК A (кэш) ===\n${cachedSystem}\n\n=== РЕЖИМ ===\n${MODE_SYSTEM_PROMPTS[mode]}\n\n=== БЛОК B ===\n${dynamicContext}`}
+                {`${cachedBlocks
+                  .map((b, i) => `=== БЛОК A${i + 1} (кэш, ttl ${b.ttl}) ===\n${b.text}`)
+                  .join('\n\n')}\n\n=== РЕЖИМ ===\n${modeSystem}\n\n=== БЛОК B ===\n${dynamicContext}`}
               </pre>
             )}
           </div>

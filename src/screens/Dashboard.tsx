@@ -61,6 +61,9 @@ export function Dashboard() {
           <Button variant="ghost" onClick={() => fileRef.current?.click()}>
             Импорт JSON
           </Button>
+          <Link to="/corpus">
+            <Button variant="ghost">Корпус</Button>
+          </Link>
           <Link to="/settings">
             <Button variant="ghost">Настройки</Button>
           </Link>

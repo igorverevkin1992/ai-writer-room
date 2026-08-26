@@ -337,7 +337,8 @@ export type AIMode =
   | 'circle_check'
   | 'arc_audit'
   | 'scene_doctor'
-  | 'fincher_pass';
+  | 'fincher_pass'
+  | 'canon_check';
 
 export const AI_MODE_LABELS: Record<AIMode, string> = {
   genre_audit: '1 · Аудит жанра (Труби)',
@@ -346,9 +347,10 @@ export const AI_MODE_LABELS: Record<AIMode, string> = {
   arc_audit: '4 · Аудит арки (Уайлэнд)',
   scene_doctor: '5 · Доктор сцены (Моури)',
   fincher_pass: '6 · Финчеровский проход (Финчер)',
+  canon_check: '7 · Сверка с первоисточником',
 };
 
-export type ScopeType = 'project' | 'beat' | 'node' | 'character' | 'scene';
+export type ScopeType = 'project' | 'beat' | 'node' | 'character' | 'scene' | 'corpus';
 
 export interface AIUsage {
   inputTokens: number;
@@ -375,4 +377,92 @@ export interface AIConversation {
   messages: AIMessage[];
   createdAt: number;
   updatedAt: number;
+}
+
+/* ────────────────────────  Корпус первоисточников  ──────────────────────── */
+
+export type SourceKind = 'book' | 'transcript' | 'script' | 'article' | 'notes';
+
+export const SOURCE_KIND_LABELS: Record<SourceKind, string> = {
+  book: 'Книга',
+  transcript: 'Транскрипт',
+  script: 'Сценарий',
+  article: 'Статья',
+  notes: 'Заметки',
+};
+
+/** Автор методологии — он же слой ядра. `other` для всего постороннего. */
+export type SourceAuthor = 'truby' | 'harmon' | 'weiland' | 'mowry' | 'fincher' | 'other';
+
+export const SOURCE_AUTHOR_LABELS: Record<SourceAuthor, string> = {
+  truby: 'Труби — жанр',
+  harmon: 'Хармон — структура',
+  weiland: 'Уайлэнд — персонаж',
+  mowry: 'Моури — тактика',
+  fincher: 'Финчер — текст',
+  other: 'Другое',
+};
+
+/**
+ * Концепты методологии — словарь, по которому куски корпуса привязываются
+ * к режимам AI. Точнее, чем семантическая близость: запрос «аудит арки»
+ * должен тянуть главы про Ложь и мидпоинт, а не всё похожее по словам.
+ */
+export type Concept =
+  | 'genre_beats'
+  | 'genre_transcendence'
+  | 'story_circle'
+  | 'find_take'
+  | 'continuity'
+  | 'lie_ghost'
+  | 'want_need'
+  | 'arc_types'
+  | 'midpoint'
+  | 'pinch_points'
+  | 'philosophical_conflict'
+  | 'scene_craft'
+  | 'dialogue'
+  | 'page_style';
+
+export const CONCEPT_LABELS: Record<Concept, string> = {
+  genre_beats: 'Обязательные биты жанра',
+  genre_transcendence: 'Трансценденция жанра',
+  story_circle: 'Круг: восемь шагов',
+  find_take: 'FIND и TAKE, цена',
+  continuity: 'Стыковка кругов, сериальность',
+  lie_ghost: 'Ложь и Призрак',
+  want_need: 'Хочет и Нужно',
+  arc_types: 'Типы арок',
+  midpoint: 'Мидпоинт, Момент истины',
+  pinch_points: 'Пинч-поинты, давление оппозиции',
+  philosophical_conflict: 'Философский конфликт, паутина персонажей',
+  scene_craft: 'Устройство сцены, поворот, заряд',
+  dialogue: 'Диалог, вопросы Мэмета',
+  page_style: 'Текст на странице, дозировка информации',
+};
+
+export interface SourceDoc {
+  id: ID;
+  title: string;
+  author: SourceAuthor;
+  kind: SourceKind;
+  /** Откуда взят текст: имя файла, ссылка на видео, издание. */
+  citation: string;
+  /** Закреплён в кэшируемом префиксе целиком, а не выдержками. */
+  pinned: boolean;
+  charCount: number;
+  chunkCount: number;
+  createdAt: number;
+  note: string;
+}
+
+export interface SourceChunk {
+  id: ID;
+  docId: ID;
+  /** Порядковый номер в документе, 1-based — работает как «страница». */
+  index: number;
+  /** Ближайший вышестоящий заголовок или тайм-код — для ссылки. */
+  anchor: string;
+  text: string;
+  concepts: Concept[];
 }

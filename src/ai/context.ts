@@ -21,7 +21,10 @@ import {
   type StoryBible,
   type StructureNode,
 } from '../types';
+import { SOURCE_AUTHOR_LABELS, SOURCE_KIND_LABELS } from '../types';
 import { MAMET_SUBMODE_PROMPT } from './prompts';
+import { conceptQueryTerms, MODE_CONCEPTS } from '../lib/corpus/concepts';
+import { pinnedDocuments, searchCorpus, type CorpusExcerpt } from '../lib/corpus/search';
 
 export interface ContextBundle {
   project: Project;
@@ -42,6 +45,8 @@ export interface Scope {
 }
 
 export type ContextKey =
+  | 'corpus_pinned'
+  | 'corpus'
   | 'project_core'
   | 'world'
   | 'characters'
@@ -62,9 +67,11 @@ export interface ContextItem {
 }
 
 export const CONTEXT_ITEMS: ContextItem[] = [
+  { key: 'corpus_pinned', label: 'Закреплённые первоисточники целиком', block: 'A' },
   { key: 'project_core', label: 'Логлайн, жанры, философский конфликт, тема', block: 'A' },
   { key: 'world', label: 'Мир и правила (библия)', block: 'A' },
   { key: 'characters', label: 'Библия персонажей (Ложь/Призрак/Хочет/Нужно/голос)', block: 'A' },
+  { key: 'corpus', label: 'Выдержки из корпуса по теме запроса', block: 'B' },
   { key: 'beats', label: 'Жанровые биты со статусами', block: 'B' },
   { key: 'structure', label: 'Дерево структуры (заголовки и саммари)', block: 'B' },
   { key: 'node', label: 'Выбранный узел: круг, цена, бит Уайлэнд', block: 'B' },
@@ -78,6 +85,8 @@ export const CONTEXT_ITEMS: ContextItem[] = [
 export type ContextToggles = Record<ContextKey, boolean>;
 
 const NONE: ContextToggles = {
+  corpus_pinned: true,
+  corpus: true,
   project_core: true,
   world: false,
   characters: false,
@@ -105,6 +114,8 @@ export function defaultToggles(mode: AIMode): ContextToggles {
       return { ...NONE, characters: true, scene: true, node: true, scene_text: true };
     case 'fincher_pass':
       return { ...NONE, characters: true, scene: true, scene_text: true };
+    case 'canon_check':
+      return { ...NONE, beats: true };
     default:
       return { ...NONE };
   }
@@ -323,27 +334,139 @@ ${
 
 /* ────────────────────────────  сборка  ──────────────────────────── */
 
-export function buildCachedSystem(bundle: ContextBundle, toggles: ContextToggles): string {
-  const parts = [
-    `Ты работаешь внутри инструмента разработки сериалов Writers Room OS.
+/* ────────────────────────────  корпус  ──────────────────────────── */
+
+export function citationOf(excerpt: CorpusExcerpt): string {
+  const author = SOURCE_AUTHOR_LABELS[excerpt.doc.author].split(' — ')[0];
+  return `${author}, ${excerpt.doc.title}, ${excerpt.chunk.anchor}`;
+}
+
+export function renderExcerpts(excerpts: CorpusExcerpt[]): string {
+  if (!excerpts.length) return '';
+  return `ВЫДЕРЖКИ ИЗ ПЕРВОИСТОЧНИКОВ (канон, ссылайся на них)
+${excerpts
+  .map(
+    (e) => `--- [${citationOf(e)}] ---
+${e.chunk.text.trim()}`,
+  )
+  .join('\n\n')}
+--- конец выдержек ---`;
+}
+
+/**
+ * Поисковый запрос к корпусу собирается из режима, разбираемой сущности и
+ * запроса автора. Слова режима нужны потому, что автор пишет «почему не
+ * работает», а в книге это называется «задача сцены» и «поворот».
+ */
+export function retrievalQuery(params: {
+  mode: AIMode;
+  bundle: ContextBundle;
+  scope: Scope;
+  query: string;
+}): string {
+  const { mode, bundle, scope, query } = params;
+  const parts: string[] = [conceptQueryTerms(MODE_CONCEPTS[mode]), query];
+
+  const beat = scope.beatId ? bundle.beats.find((b) => b.id === scope.beatId) : undefined;
+  if (beat) parts.push(beat.beatName, beat.beatDescription, GENRE_LABELS[beat.genre]);
+  else if (mode === 'genre_audit' || mode === 'canon_check') {
+    parts.push(GENRE_LABELS[bundle.project.genrePrimary]);
+  }
+
+  const node = scope.nodeId ? bundle.nodes.find((n) => n.id === scope.nodeId) : undefined;
+  if (node) {
+    const weiland = WEILAND_BEATS.find((b) => b.key === node.weilandBeat);
+    if (weiland && node.weilandBeat !== 'none') parts.push(weiland.label);
+  }
+
+  const character = scope.characterId
+    ? bundle.characters.find((c) => c.id === scope.characterId)
+    : undefined;
+  if (character) parts.push(ARC_TYPE_LABELS[character.arcType], character.lie, character.need);
+
+  const scene = scope.sceneId ? bundle.scenes.find((s) => s.id === scope.sceneId) : undefined;
+  if (scene) parts.push(scene.sceneObjective, scene.obstacle, scene.turn);
+
+  return parts.filter(Boolean).join(' ');
+}
+
+export const DEFAULT_EXCERPT_LIMIT = 6;
+
+export async function retrieveExcerpts(params: {
+  mode: AIMode;
+  bundle: ContextBundle;
+  scope: Scope;
+  query: string;
+  limit?: number;
+}): Promise<CorpusExcerpt[]> {
+  return searchCorpus(retrievalQuery(params), {
+    concepts: MODE_CONCEPTS[params.mode],
+    limit: params.limit ?? DEFAULT_EXCERPT_LIMIT,
+  });
+}
+
+/** Закреплённые документы целиком — самый стабильный блок кэша. */
+export async function buildPinnedBlock(): Promise<string> {
+  const pinned = await pinnedDocuments();
+  if (!pinned.length) return '';
+  return `ПЕРВОИСТОЧНИКИ ЦЕЛИКОМ (канон)
+${pinned
+  .map(
+    ({ doc, chunks }) => `=== ${SOURCE_AUTHOR_LABELS[doc.author].split(' — ')[0]}. ${doc.title} (${SOURCE_KIND_LABELS[doc.kind]}) ===
+${doc.citation ? `Источник: ${doc.citation}\n` : ''}${chunks
+      .map((c) => `[${c.anchor}]\n${c.text.trim()}`)
+      .join('\n\n')}`,
+  )
+  .join('\n\n')}
+=== конец первоисточников ===`;
+}
+
+/* ────────────────────────────  сборка  ──────────────────────────── */
+
+export const ROLE_BLOCK = `Ты работаешь внутри инструмента разработки сериалов Writers Room OS.
 Методологическое ядро жёстко задано и не обсуждается:
 Труби (жанр как обязательные биты) → Хармон (круг структуры) → Уайлэнд (арка через Ложь)
 → Моури (поворот, цена, сцена) → Финчер (текст на странице).
 Ты не пишешь за автора. Ты аудируешь структуру по формальным критериям методологии
-и переписываешь текст только тогда, когда это прямо задача режима.`,
-  ];
+и переписываешь текст только тогда, когда это прямо задача режима.`;
+
+export function buildProjectBlock(bundle: ContextBundle, toggles: ContextToggles): string {
+  const parts: string[] = [];
   if (toggles.project_core) parts.push(renderProjectCore(bundle.project));
   if (toggles.world) parts.push(renderWorld(bundle.bible));
   if (toggles.characters) parts.push(renderCharacters(bundle.characters));
   return parts.filter(Boolean).join('\n\n');
 }
 
+/**
+ * Кэшируемые блоки в порядке убывания стабильности: роль и корпус живут
+ * между проектами, библия проекта — внутри проекта. Обратный порядок сбрасывал
+ * бы кэш корпуса при каждой правке логлайна.
+ */
+export function buildCachedBlocks(params: {
+  bundle: ContextBundle;
+  toggles: ContextToggles;
+  pinnedBlock: string;
+}): { text: string; ttl: '5m' | '1h' }[] {
+  const corpus = params.toggles.corpus_pinned ? params.pinnedBlock : '';
+  return [
+    {
+      text: [ROLE_BLOCK, corpus].filter(Boolean).join('\n\n'),
+      // Корпус не меняется весь сеанс — час жизни кэша окупает удвоенную запись.
+      ttl: (corpus ? '1h' : '5m') as '5m' | '1h',
+    },
+    { text: buildProjectBlock(params.bundle, params.toggles), ttl: '5m' as const },
+  ].filter((b) => b.text.trim());
+}
+
 export function buildDynamicContext(
   bundle: ContextBundle,
   toggles: ContextToggles,
   scope: Scope,
+  excerpts: CorpusExcerpt[] = [],
 ): string {
   const parts: string[] = [];
+  if (toggles.corpus && excerpts.length) parts.push(renderExcerpts(excerpts));
   const node = scope.nodeId ? bundle.nodes.find((n) => n.id === scope.nodeId) : undefined;
   const character = scope.characterId
     ? bundle.characters.find((c) => c.id === scope.characterId)
@@ -392,8 +515,14 @@ export function buildUserMessage(params: {
   toggles: ContextToggles;
   scope: Scope;
   query: string;
+  excerpts?: CorpusExcerpt[];
 }): string {
-  const dynamic = buildDynamicContext(params.bundle, params.toggles, params.scope);
+  const dynamic = buildDynamicContext(
+    params.bundle,
+    params.toggles,
+    params.scope,
+    params.excerpts ?? [],
+  );
   const scene = params.scope.sceneId
     ? params.bundle.scenes.find((s) => s.id === params.scope.sceneId)
     : undefined;

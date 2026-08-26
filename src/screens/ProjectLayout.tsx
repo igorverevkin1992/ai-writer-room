@@ -65,6 +65,9 @@ export function ProjectLayout() {
           </Chip>
           {diag.errors > 0 && <Chip tone="bad">дефектов {diag.errors}</Chip>}
           {diag.warnings > 0 && <Chip tone="warn">замечаний {diag.warnings}</Chip>}
+          <Link to="/corpus" className="text-muted hover:text-paper text-xs">
+            Корпус
+          </Link>
           <Link to="/settings" className="text-muted hover:text-paper text-xs">
             Настройки
           </Link>

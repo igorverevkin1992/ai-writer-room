@@ -148,6 +148,11 @@ export function GenreCoverage() {
                       setAiBeatId(b.id);
                       setAiOpen(true);
                     }}
+                    onCanonCheck={() => {
+                      setAiMode('canon_check');
+                      setAiBeatId(b.id);
+                      setAiOpen(true);
+                    }}
                   />
                 ))}
                 {!visible(primaryBeats).length && <Empty>Все биты размещены</Empty>}
@@ -169,6 +174,11 @@ export function GenreCoverage() {
                         bundle={bundle}
                         onTranscend={() => {
                           setAiMode('beat_transcendence');
+                          setAiBeatId(b.id);
+                          setAiOpen(true);
+                        }}
+                        onCanonCheck={() => {
+                          setAiMode('canon_check');
                           setAiBeatId(b.id);
                           setAiOpen(true);
                         }}
@@ -196,7 +206,7 @@ export function GenreCoverage() {
               bundle={bundle}
               mode={aiMode}
               onModeChange={setAiMode}
-              modes={['genre_audit', 'beat_transcendence']}
+              modes={['genre_audit', 'beat_transcendence', 'canon_check']}
               scope={{ beatId: aiBeatId }}
               scopeType={aiBeatId ? 'beat' : 'project'}
               title="Жанровый аудит"
@@ -230,10 +240,12 @@ function BeatCard({
   beat,
   bundle,
   onTranscend,
+  onCanonCheck,
 }: {
   beat: GenreBeat;
   bundle: ReturnType<typeof useProjectBundle>;
   onTranscend: () => void;
+  onCanonCheck: () => void;
 }) {
   const [open, setOpen] = useState(false);
   const { attributes, listeners, setNodeRef, isDragging } = useDraggable({ id: beat.id });
@@ -319,6 +331,9 @@ function BeatCard({
           <div className="flex gap-2">
             <Button size="sm" variant="ghost" onClick={onTranscend}>
               Как вывернуть? (AI)
+            </Button>
+            <Button size="sm" variant="ghost" onClick={onCanonCheck}>
+              Сверить с первоисточником
             </Button>
             <Button
               size="sm"
