@@ -1,19 +1,25 @@
-import path from 'path';
-import { defineConfig, loadEnv } from 'vite';
+import { defineConfig } from 'vitest/config';
 import react from '@vitejs/plugin-react';
 
-// https://vitejs.dev/config/
 export default defineConfig({
   plugins: [react()],
+  build: {
+    rollupOptions: {
+      output: {
+        manualChunks: {
+          anthropic: ['@anthropic-ai/sdk'],
+          vendor: ['react', 'react-dom', 'react-router-dom', 'dexie', 'dexie-react-hooks'],
+        },
+      },
+    },
+  },
   server: {
-    // ВАЖНО: Разрешает доступ из сети (извне контейнера)
-    host: true, 
-    // Жестко задаем порт
+    host: true,
     port: 5173,
-    // ВАЖНО ДЛЯ WINDOWS: Включает опрос файлов, иначе изменения кода 
-    // не будут обновлять страницу в браузере (Hot Reload)
-    watch: {
-      usePolling: true
-    }
-  }
-})
+    watch: { usePolling: true },
+  },
+  test: {
+    environment: 'node',
+    include: ['src/**/*.test.ts'],
+  },
+});

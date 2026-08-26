@@ -1,34 +1,22 @@
 {
   "compilerOptions": {
     "target": "ES2022",
-    "experimentalDecorators": true,
-    "useDefineForClassFields": false,
     "module": "ESNext",
-    "lib": [
-      "ES2022",
-      "DOM",
-      "DOM.Iterable"
-    ],
+    "lib": ["ES2022", "DOM", "DOM.Iterable"],
     "skipLibCheck": true,
-    
-    /* Объединили типы в один массив */
-    "types": ["vite/client", "node"],
-
+    "types": ["vite/client", "vitest/globals"],
     "moduleResolution": "bundler",
     "isolatedModules": true,
     "moduleDetection": "force",
-    "allowJs": true,
     "jsx": "react-jsx",
-    
-    /* Настройка путей */
+    "strict": true,
+    "noUnusedLocals": true,
+    "noUnusedParameters": true,
+    "noFallthroughCasesInSwitch": true,
     "baseUrl": ".",
-    "paths": {
-      "@/*": ["./src/*"]
-    },
-    
+    "paths": { "@/*": ["./src/*"] },
     "allowImportingTsExtensions": true,
     "noEmit": true
   },
-  /* Главная настройка: сканировать папку src */
-  "include": ["src"]
+  "include": ["src", "vite.config.ts"]
 }

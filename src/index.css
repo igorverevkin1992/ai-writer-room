@@ -2,8 +2,43 @@
 @tailwind components;
 @tailwind utilities;
 
-/* Можно добавить базовый цвет фона, чтобы не было белым */
-body {
-  background-color: #111827; /* Темно-серый цвет (gray-900) */
-  color: white;
+@layer base {
+  html,
+  body,
+  #root {
+    height: 100%;
+  }
+  body {
+    @apply bg-ink-900 text-paper font-sans antialiased;
+  }
+  ::-webkit-scrollbar {
+    width: 9px;
+    height: 9px;
+  }
+  ::-webkit-scrollbar-track {
+    @apply bg-ink-900;
+  }
+  ::-webkit-scrollbar-thumb {
+    @apply bg-ink-600 rounded;
+  }
+  ::-webkit-scrollbar-thumb:hover {
+    @apply bg-ink-500;
+  }
+}
+
+@layer components {
+  .field {
+    @apply w-full bg-ink-850 border border-ink-600 rounded px-2.5 py-1.5 text-sm
+           text-paper placeholder:text-muted/60 outline-none
+           focus:border-accent/70 focus:ring-1 focus:ring-accent/30 transition-colors;
+  }
+  .label {
+    @apply block text-[11px] uppercase tracking-wider text-muted mb-1;
+  }
+  .card {
+    @apply bg-ink-850 border border-ink-700 rounded-lg;
+  }
+  .chip {
+    @apply inline-flex items-center gap-1 rounded px-1.5 py-0.5 text-[11px] font-medium;
+  }
 }
